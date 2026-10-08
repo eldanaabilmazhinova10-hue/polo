@@ -1,0 +1,131 @@
+import json
+import os
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
+
+from dotenv import load_dotenv
+load_dotenv()
+
+# Токен твоего бота (получи у @BotFather)
+TOKEN = os.environ.get("TOKEN")
+
+# Состояния для Диалога (ConversationHandler)
+NAME, COLOR = range(2)
+
+# Глобальный словарь для хранения данных пользователей в памяти
+user_data = {}
+
+
+def load_data():
+    """Загрузка данных пользователей из JSON-файла при старте."""
+    global user_data
+    if os.path.exists("user.json"):
+        try:
+            with open("user.json", "r", encoding="utf-8") as f:
+                user_data = json.load(f)
+        except Exception as e:
+            print(f"Ошибка при загрузке user.json: {e}")
+            user_data = {}
+    else:
+        user_data = {}
+
+
+def save_data():
+    """Сохранение текущего словаря user_data в JSON-файл."""
+    with open("user.json", "w", encoding="utf-8") as f:
+        json.dump(user_data, f, ensure_ascii=False, indent=4)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Старт опроса: запрашиваем имя пользователя."""
+    await update.message.reply_text("Привет! Давай заполнитель твой профиль. Как тебя зовут?")
+    return NAME
+
+
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохраняем имя во временное хранилище и просим ввести любимый цвет."""
+    name = update.message.text
+    context.user_data["name"] = name  # Временное хранение внутри контекста сессии
+
+    await update.message.reply_text(f"Приятно познакомиться, {name}! Какой твой любимый цвет?")
+    return COLOR
+
+
+async def get_color(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Завершаем опрос, сохраняем имя и цвет в глобальный user_data и файл."""
+    color = update.message.text
+    name = context.user_data.get("name")
+    user_id = str(update.effective_user.id)  # JSON использует только строковые ключи
+
+    # Записываем в основной словарь
+    user_data[user_id] = {
+        "name": name,
+        "color": color
+    }
+
+    # Сохраняем обновлённый словарь в user.json
+    save_data()
+
+    await update.message.reply_text(
+        f"Отлично! Профиль сохранён.\nИмя: {name}\nЦвет: {color}\n\n"
+        "Посмотреть профиль в любой момент можно командой /profile."
+    )
+    return ConversationHandler.END
+
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает сохранённый профиль пользователя из user_data."""
+    user_id = str(update.effective_user.id)
+
+    if user_id in user_data:
+        profile_info = user_data[user_id]
+        text = (
+            "👤 **Твой профиль:**\n"
+            f"Имя: {profile_info.get('name')}\n"
+            f"Любимый цвет: {profile_info.get('color')}"
+        )
+    else:
+        text = "Профиль не найден! Введи /start, чтобы зарегистрироваться."
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена заполнения профиля."""
+    await update.message.reply_text("Заполнение профиля отменено.")
+    return ConversationHandler.END
+
+
+def main():
+    # Загружаем данные из файла при запуске бота
+    load_data()
+
+    # Инициализация приложения бота
+    app = Application.builder().token(TOKEN).build()
+
+    # Обработчик диалога записи профиля (/start -> Имя -> Цвет)
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            COLOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_color)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    app.add_handler(conv_handler)
+    app.add_handler(CommandHandler("profile", profile))
+
+    print("Бот запущен...")
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
